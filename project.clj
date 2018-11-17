@@ -6,4 +6,5 @@
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [org.clojure/core.async "0.2.391"]
                  [aleph "0.4.2-alpha1"]
-                 [gloss "0.2.5"] ])
+                 [gloss "0.2.5"] 
+                 [clj-message-digest "1.0.0"]])
