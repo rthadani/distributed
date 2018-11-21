@@ -73,6 +73,7 @@
               (assoc-server "192.168.0.1")
               (assoc-server "192.168.0.2")))
 
+#_ (get-server chr "file3")          
 #_ (get-server chr "file1")          
 
 #_(dissoc-server chr "192.168.0.1")
