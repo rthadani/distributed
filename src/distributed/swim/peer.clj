@@ -6,7 +6,9 @@
             [gloss.io :as io]
             [manifold.deferred :as d]
             [distributed.swim.message :as message]
-            [clojure.core.async :as async]))
+            [clojure.core.async :as async]
+            [distributed.swim.protocols :refer [Peer]]
+            [core.async :refer [!!>]]))
 
 ;incoming message handler
 (defmulti peer-message-handler
@@ -78,3 +80,12 @@
   (if-let [mlist @(direct-ping host port id timeout-ms @membership-list)]
     (update-membership-list membership-list mlist)
     (indirect-ping host port timeout-ms @membership-list)))
+
+(defrecord ChannelPeer [id state ch]
+  Peer
+  (get-id [_] id)
+  (get-state [_] state)
+  (send-message [_ other message]
+     (!!> ))
+  (receive-message [_ other])
+  (connect [_ other]))
