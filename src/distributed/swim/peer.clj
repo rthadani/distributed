@@ -85,7 +85,7 @@
   Peer
   (get-id [_] id)
   (get-state [_] state)
-  (send-message [_ other message]
+  (send-message-with-ack [_ other message]
      (!!> ))
   (receive-message [_ other])
   (connect [_ other]))
