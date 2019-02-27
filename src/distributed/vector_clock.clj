@@ -78,19 +78,19 @@
 (defn- map-to-timestamps [ts-as-map]
   (map (fn [[id version]] (->VectorClockTimestamp id version)) ts-as-map))
 
-#_(def alice (VectorClock. [(VectorClockTimestamp. :Alice 1)] "Lunch Wednesday?"))
-#_alice
-#_(def ben (update-clock alice :Ben "How about Tuesday!"))
-#_ben
-#_(def dave (update-clock ben :Dave "Tuesday is good"))
-#_dave
-#_(descendant? dave alice)
-#_(descendant? alice dave)
-#_(ancestor? alice dave)
-#_(version-for-id :Ben (:timestamps dave))
-#_(def cathy (update-clock alice :Cathy "Thursday?"))
-#_cathy
-#_(conflict? dave cathy)
-#_(def conflict-resolved (merge-clock dave cathy :Dave "Thursday works"))
-#_conflict-resolved
-#_(descendant? conflict-resolved dave)
+#_ (def alice (->VectorClock [(VectorClockTimestamp. :Alice 1)] "Lunch Wednesday?"))
+#_ alice
+#_ (def ben (update-clock alice :Ben "How about Tuesday!"))
+#_ ben
+#_ (def dave (update-clock ben :Dave "Tuesday is good"))
+#_ dave
+#_ (descendant? dave alice)
+#_ (descendant? alice dave)
+#_ (ancestor? alice dave)
+#_ (version-for-id :Ben (:timestamps dave))
+#_ (def cathy (update-clock alice :Cathy "Thursday?"))
+#_ cathy
+#_ (conflict? dave cathy)
+#_ (def conflict-resolved (merge-clock dave cathy :Dave "Thursday works"))
+#_ conflict-resolved
+#_ (descendant? conflict-resolved dave)

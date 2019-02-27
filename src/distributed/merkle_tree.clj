@@ -2,6 +2,7 @@
   (:require [clj-message-digest.core :refer [sha-1-hex]]))
 
 (declare get-leaves)
+(declare level-order)
 
 (defrecord MerkleTree [v l r sha])
 
@@ -36,14 +37,14 @@
         lo2 (level-order m2)
         length-lo1 (count lo1)
         length-lo2 (count lo2)  
-        diff-lengths (if (> length-lo1 length-lo2) (subvec lo1 (length lo2)) (subvec lo2 (length lo1)))]))
+        diff-lengths (if (> length-lo1 length-lo2) (subvec lo1 (count lo2)) (subvec lo2 (count lo1)))]))
 
 (defn- get-leaves
   [merkle-tree]
   (let [{:keys [v l r]} merkle-tree]
     (if (and (nil? l) (nil? r))
       [merkle-tree]
-      (into [] (concat (get-leaves l) (get-leaves r))))))
+      (vec (concat (get-leaves l) (get-leaves r))))))
 
 (defn- children
   [mkl-node]
@@ -68,6 +69,6 @@
                (inc level))))))
 
 
-(def mkl-tree (create-mkl-tree "file1" "file2" "file3" "file4"))
-(children mkl-tree)
-(level-order mkl-tree)
+#_ (def mkl-tree (create-mkl-tree "file1" "file2" "file3" "file4"))
+#_ (children mkl-tree)
+#_ (level-order mkl-tree)
