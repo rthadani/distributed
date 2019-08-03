@@ -39,3 +39,13 @@
                             :last-log-term 0})
         follower (->Follower global-state config)]
     (server (:port config))))
+
+#_(def config1 {:id 1
+                :me "localhost:8000"
+                :servers ["localhost:8000", "localhost:8001"]
+                :election-timeout 300})
+
+#_(def config2 {:id 1
+             :me "localhost:8001"
+             :servers ["localhost:8000", "localhost:8001"]
+             :election-timeout 300}
