@@ -13,11 +13,11 @@
 
 (defn start-heartbeat-timer
   [global-state {:keys [heartbeat-time-ms] :as config}]
-  (cancel-heartbeat-timer)
+  (cancel-heartbeat-timer global-state)
   (let [hb-timer (timer "heartbeat-timer")]
     (run-task! #(do
                   (println "heartbeat expired")
-                  (cancel-heartbeat-timer)
+                  (cancel-heartbeat-timer global-state)
                   (let [candidate (factory/make-candidate global-state config) ]
                     (swap! global-state assoc :current-state candidate)
                     (init candidate)))
@@ -37,7 +37,7 @@
 
   (handle-append-entries
    [_ request respond-to]
-   (let [{:keys [current-term heartbeat-timer]} @global-state
+   (let [{:keys [current-term]} @global-state
          term (.getTerm request)
          entries (.getAllEntries request)]
      (cond
@@ -45,7 +45,6 @@
        (empty? entries) (do (start-heartbeat-timer global-state config)
                             (rpc/build-append-response {:term current-term :success true}))
        :else (println "Cant deal with real entries right now"))))
-
   (handle-vote-request 
     [_ request respond-to]))
 
