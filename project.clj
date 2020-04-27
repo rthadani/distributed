@@ -11,4 +11,5 @@
                  [io.grpc/grpc-netty "1.1.2"]
                  [io.grpc/grpc-protobuf "1.1.2"]
                  [io.grpc/grpc-stub "1.1.2"]
-                 [clj-message-digest "1.0.0"]])
+                 [clj-message-digest "1.0.0"]
+                 [org.clojure/data.priority-map "1.0.0"]])
