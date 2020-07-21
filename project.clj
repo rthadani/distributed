@@ -5,7 +5,7 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :java-source-paths ["gen"]
   :dependencies [[org.clojure/clojure "1.10.0"]
-                 [org.clojure/core.async "0.4.490"]
+                 [org.clojure/core.async "1.2.603"]
                  [ruiyun/tools.timer "1.0.1"]
                  [clojusc/protobuf "3.5.1-v1.1"]
                  [io.grpc/grpc-netty "1.1.2"]
