@@ -81,9 +81,9 @@
     (update-membership-list membership-list mlist)
     (indirect-ping host port timeout-ms @membership-list)))
 
-(defrecord ChannelPeer [id state ch]
+(defrecord Channhttps://nrepl.org/nrepl/installation.htmlte ch]
   Peer
-  (get-id [_] id)
+  (get-id [_] idhttps://nrepl.org/nrepl/installation.html
   (get-state [_] state)
   (send-message-with-ack [_ other message]
      (!!> ))

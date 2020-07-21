@@ -18,9 +18,7 @@
     (run-task! #(do
                   (println "heartbeat expired")
                   (cancel-heartbeat-timer global-state)
-                  (let [candidate (factory/make-candidate global-state config) ]
-                    (swap! global-state assoc :current-state candidate)
-                    (init candidate)))
+                  (factory/change-state :Candidate global-state config))
                :period heartbeat-time-ms :dealy heartbeat-time-ms :by hb-timer)
     (swap! global-state assoc :heartbeat-timer hb-timer)))
 
@@ -28,25 +26,30 @@
            [global-state config]
   RaftState
   (state 
-   [_] 
-   :follower)
+    [_] 
+    :follower)
 
   (init
     [_]
     (start-heartbeat-timer global-state config))
 
   (handle-append-entries
-   [_ request respond-to]
-   (let [{:keys [current-term]} @global-state
-         term (.getTerm request)
-         entries (.getAllEntries request)]
-     (cond
-       (< term current-term) (rpc/send-grpc-response respond-to (rpc/build-append-response {:term current-term :success false}))
-       (empty? entries) (do (start-heartbeat-timer global-state config)
-                            (rpc/build-append-response {:term current-term :success true}))
-       :else (println "Cant deal with real entries right now"))))
+    [_ request respond-to]
+    (let [{:keys [current-term]} @global-state
+          term (.getTerm request)
+          entries (.getAllEntries request)]
+      (cond
+        (< term current-term) (rpc/send-grpc-response respond-to (rpc/build-append-response {:term current-term :success false}))
+        (empty? entries) (do (start-heartbeat-timer global-state config)
+                             (rpc/build-append-response {:term current-term :success true}))
+        :else (println "Cant deal with real entries right now"))))
+
   (handle-vote-request 
-    [_ request respond-to]))
+    [_ request respond-to]
+    (let [vote-request (->clj request)]))
+
+  (handle-log-request)  
+  )
 
 
 #_(start-heartbeat-timer 1000)

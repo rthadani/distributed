@@ -7,7 +7,7 @@
   Membership
   (update-state 
     [_ peer state]
-    (swap! peers assoc (p/get-id peer) (p/get-state peer)))
+    (swap! peers assoc-in [(p/get-id peer) :state] (p/get-state peer)))
   (get-state 
     [_ peer]
     (.get-state (get @peers (p/get-id peer))))
