@@ -45,7 +45,7 @@
       (swap! global-state assoc :candidate-id id)
       (do-election config global-state)))
   (handle-append-entries [_ {:keys [term] :as request} respond-to]
-    (if (> term (:current-term @global-state))
-      (-> (factory/change-state :Follower global-state config)
-          (handle-append-entries request respond-to)))
-    (handle-vote-request [_ request respond-to])))
+                         (if (> term (:current-term @global-state))
+                           (-> (factory/change-state :Follower global-state config)
+                               (handle-append-entries request respond-to)))
+                         (handle-vote-request [_ request respond-to])))
