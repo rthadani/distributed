@@ -3,12 +3,18 @@ syntax = "proto3";
 package raft;
 option java_outer_classname = "RaftSpec";
 
+message LogEntry {
+    int64 term = 1;
+    string command = 2;
+}
+
 message AppendEntries {
     int64 term = 1;
     string leader_id = 2;
-    int64 prev_log_term = 3;
-    repeated string entries = 4;
-    int64 leader_commit = 5;
+    int64 prev_log_index = 3;
+    int64 prev_log_term = 4;
+    repeated LogEntry entries = 5;
+    int64 leader_commit = 6;
 }
 
 message AppendEntriesResponse {
@@ -28,7 +34,19 @@ message RequestVoteResponse {
     bool vote_granted = 2;
 }
 
+message SubmitCommand {
+    string command = 1;
+}
+
+message SubmitCommandResponse {
+    bool success = 1;
+    string leader_id = 2;
+    bool committed = 3;
+    string result = 4;
+}
+
 service Raft {
     rpc AppendEntriesRPC(AppendEntries) returns (AppendEntriesResponse) {}
     rpc RequestVoteRPC(RequestVote) returns (RequestVoteResponse) {}
+    rpc SubmitCommandRPC(SubmitCommand) returns (SubmitCommandResponse) {}
 }

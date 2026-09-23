@@ -1,51 +1,34 @@
 (ns distributed.raft.main
-  (:require [clojure.set :as set]
-            [clojure.string :as str]
-            )
+  (:require [distributed.raft.rpc :as rpc]
+            [distributed.raft.state :as state]))
 
-  (:import (raft )))
+(defn node-config
+  "Build a node configuration. `port` is the gRPC listen port. Nodes identify
+   themselves by their host:port string (stored as :me). `:state-file` defaults
+   to data/raft-<port>.edn; pass nil to disable persistence."
+  [port & {:keys [servers election-timeout-ms heartbeat-ms state-file]}]
+  (let [me (str "127.0.0.1:" port)]
+    {:me me
+     :port port
+     :servers (or servers #{"127.0.0.1:8000" "127.0.0.1:8001" "127.0.0.1:8002"})
+     :election-timeout-ms (or election-timeout-ms 300)
+     :heartbeat-ms (or heartbeat-ms 50)
+     :state-file (or state-file (str "data/raft-" port ".edn"))}))
 
-
-(def me "127.0.0.1:8000")
-(def servers #{"127.0.0.1:8000", "127.0.0.1:8001", "127.0.0.1:8002", "127.0.0.1:8002"})
-
-
-(def global-state
-  )
-
-
-
-
-(defn send-append-request
-  [client append-request]
-  (.appendEntries client append-request))
-
-
-#_(def s (server 8000))
-#_(.shutdown s)
-#_(-> (client "localhost" 8000)
-      (send-append-request (build-append-request {:term 2 :leader-id "leader" :leader-commit 3})))
-
-
-(defn start-server
+(defn start-node!
+  "Start a Raft node: creates its state atom, binds the gRPC server, and enters
+   the Follower state. Returns {:server :global-state :config}."
   [config]
-  (let [global-state (atom {:current-state nil
-                            :current-term 0
-                            :voted-for nil
-                            :received-heartbeat false
-                            :heartbeat-timer nil
-                            :commit-index 0
-                            :last-log-index 0
-                            :last-log-term 0})
-        follower (->Follower global-state config)]
-    (server (:port config))))
+  (let [global-state (state/new-node-state config)
+        server (rpc/server (:port config) global-state)]
+    (state/change-state :Follower global-state config)
+    {:server server :global-state global-state :config config}))
 
-#_(def config1 {:id 1
-                :me "localhost:8000"
-                :servers ["localhost:8000", "localhost:8001"]
-                :election-timeout 300})
-
-#_(def config2 {:id 1
-             :me "localhost:8001"
-             :servers ["localhost:8000", "localhost:8001"]
-             :election-timeout 300}
+(defn stop-node!
+  "Stop a node's gRPC server and shut down its timers/executors."
+  [{:keys [server global-state]}]
+  (state/cancel-election-timer! global-state)
+  (state/stop-heartbeat! global-state)
+  (when-let [s (:scheduler @global-state)] (.shutdownNow s))
+  (when-let [e (:rpc-executor @global-state)] (.shutdownNow e))
+  (when server (.shutdownNow server)))
