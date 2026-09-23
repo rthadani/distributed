@@ -1,15 +1,12 @@
 (ns distributed.raft.state
   (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
-            [distributed.raft.protocol :as proto])
+            [clojure.java.io :as io])
   (:import (java.nio.file AtomicMoveNotSupportedException CopyOption Files StandardCopyOption)
            (java.util.concurrent Executors TimeUnit)))
 
-;;; Leaf namespace: owns the per-node state atom, log helpers, timers, and
-;;; state transitions. Role namespaces (follower/candidate/leader) require this
-;;; namespace, and this namespace reaches back to them lazily via
-;;; `requiring-resolve` inside `change-state`/`start-heartbeat!` to avoid a
-;;; require cycle.
+;;; Pure leaf namespace: per-node state atom, log helpers, timers, persistence,
+;;; and commit/apply. Role records and state transitions live in
+;;; distributed.raft.roles.
 
 (defmacro with-state-lock [global-state & body]
   `(locking (:lock @~global-state) ~@body))
@@ -59,6 +56,7 @@
                         :commit-index 0
                         :last-applied 0
                         :applied []
+                        :apply-fn (:apply-fn config)
                         :leader-id nil
                         :leader-volatile nil
                         :pending {}
@@ -188,21 +186,6 @@
     (.cancel t false)
     (swap! global-state assoc :heartbeat-timer nil)))
 
-(defn start-heartbeat!
-  [global-state config]
-  (stop-heartbeat! global-state)
-  (let [scheduler (:scheduler @global-state)
-        interval (:heartbeat-ms config)
-        task (fn []
-               (when (= :leader (proto/state (:current-state @global-state)))
-                 (let [replicate (requiring-resolve 'distributed.raft.leader/replicate-round!)]
-                   (replicate global-state config))))
-        fut (.scheduleAtFixedRate scheduler
-                                  ^Runnable task
-                                  (long interval)
-                                  (long interval)
-                                  TimeUnit/MILLISECONDS)]
-    (swap! global-state assoc :heartbeat-timer fut)))
 
 ;;; State-machine application and pending-promise settlement.
 
@@ -215,22 +198,29 @@
 (defn apply-committed!
   "Applies committed-but-unapplied log entries in order. No-op entries have a
    nil :command and are skipped (but still advance :last-applied and settle any
-   pending promise for that index)."
+   pending promise for that index).
+
+   When :apply-fn is configured it is called with each committed command and
+   its return value becomes the client result; otherwise the command is
+   appended to :applied (the default state machine) and used as the result."
   [global-state]
   (with-state-lock global-state
     (loop []
-      (let [{:keys [commit-index last-applied log pending]} @global-state]
+      (let [{:keys [commit-index last-applied log pending apply-fn]} @global-state]
         (when (> commit-index last-applied)
           (let [next-idx (inc last-applied)
                 entry (nth log (dec next-idx))
                 command (:command entry)]
             (swap! global-state assoc :last-applied next-idx)
-            (when command
-              (swap! global-state update :applied conj command))
-            (when-let [p (get pending next-idx)]
-              (when-not (realized? p)
-                (deliver p (or command "")))
-              (swap! global-state update :pending dissoc next-idx))
+            (let [result (when command
+                           (if apply-fn
+                             (apply-fn command)
+                             (do (swap! global-state update :applied conj command)
+                                 command)))]
+              (when-let [p (get pending next-idx)]
+                (when-not (realized? p)
+                  (deliver p (or result "")))
+                (swap! global-state update :pending dissoc next-idx)))
             (recur)))))))
 
 (defn advance-commit-index!
@@ -244,42 +234,4 @@
         (swap! global-state assoc :commit-index new-ci))
       (apply-committed! global-state))))
 
-;;; State transitions.
 
-(defn change-state
-  [new-state global-state config]
-  (let [make (case new-state
-               :Follower (requiring-resolve 'distributed.raft.follower/->Follower)
-               :Candidate (requiring-resolve 'distributed.raft.candidate/->Candidate)
-               :Leader (requiring-resolve 'distributed.raft.leader/->Leader))
-        record (make global-state config)]
-    (with-state-lock global-state
-      (swap! global-state assoc :current-state record)
-      (proto/init record))
-    record))
-
-(defn step-down-to-follower!
-  [global-state config]
-  (with-state-lock global-state
-    (when (not= :follower (proto/state (:current-state @global-state)))
-      (cancel-election-timer! global-state)
-      (stop-heartbeat! global-state)
-      (abort-pending! global-state)
-      (swap! global-state assoc
-             :voted-for nil
-             :leader-volatile nil
-             :leader-id nil
-             :votes #{})
-      (change-state :Follower global-state config))))
-
-(defn step-down-on-term!
-  "If (pred term current-term) holds, records the higher term and becomes a
-   Follower. Returns true when it stepped down."
-  [global-state config term pred]
-  (with-state-lock global-state
-    (let [ct (:current-term @global-state)]
-      (when (pred term ct)
-        (when (> term ct)
-          (swap! global-state assoc :current-term term))
-        (step-down-to-follower! global-state config)
-        true))))

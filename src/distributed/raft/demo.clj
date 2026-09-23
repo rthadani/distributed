@@ -1,5 +1,6 @@
 (ns distributed.raft.demo
-  (:require [distributed.raft.main :as main]
+  (:require [clojure.string :as str]
+            [distributed.raft.main :as main]
             [distributed.raft.client :as client]
             [distributed.raft.protocol :as proto]))
 
@@ -16,30 +17,60 @@
         v
         (do (Thread/sleep 50) (recur deadline))))))
 
-(defn- print-applied [nodes label]
+(defn- kv-apply-fn [store]
+  (fn [command]
+    (let [[op kv] (str/split (str command) #"\s+" 2)]
+      (when (= "SET" op)
+        (let [[k v] (str/split kv #"=" 2)]
+          (swap! store assoc k v))))
+    command))
+
+(defn- print-kv [nodes stores label]
+  (println label)
+  (doseq [[node store] (map vector nodes stores)]
+    (println "  " (:me (:config node)) "kv=" (pr-str @store))))
+
+(defn- snapshot [nodes label]
   (println label)
   (doseq [node nodes]
     (println "  " (:me (:config node))
-             "applied=" (vec (:applied @(:global-state node))))))
+             "state=" (some-> (:current-state @(:global-state node)) proto/state)
+             "term=" (:current-term @(:global-state node))
+             "log-len=" (count (:log @(:global-state node))))))
 
 (defn -main [& _]
-  (let [configs (mapv main/node-config [8000 8001 8002])
+  (let [ports [8000 8001 8002]
+        stores (mapv (fn [_] (atom {})) ports)
+        configs (mapv (fn [port store]
+                        (assoc (main/node-config port) :apply-fn (kv-apply-fn store)))
+                      ports stores)
         nodes (mapv main/start-node! configs)]
     (println "Booted 3 nodes (8000, 8001, 8002).")
     (doseq [node nodes]
       (println "  " (:me (:config node))
                "loaded term=" (:current-term @(:global-state node))
                "log-len=" (count (:log @(:global-state node)))))
-    (println "Waiting for election...")
-    (Thread/sleep 1500)
+    (println "Waiting for election + recovery (no client commands yet)...")
+    (loop [i 0]
+      (snapshot nodes (str "  [" i "]"))
+      (let [ldr (leader-node nodes)
+            tgt-term (when ldr (:current-term @(:global-state ldr)))
+            tgt-log (when ldr (count (:log @(:global-state ldr))))
+            caught-up? (and ldr
+                            (every? #(and (>= (:current-term @(:global-state %)) tgt-term)
+                                          (>= (count (:log @(:global-state %))) tgt-log))
+                                    nodes))]
+        (if (or caught-up? (>= i 20))
+          (println "Recovery complete." (when ldr (str " leader=" (:me (:config ldr)))))
+          (do (Thread/sleep 250) (recur (inc i))))))
     (try
       (let [leader (leader-node nodes)]
         (println "Initial leader:" (when leader (:me (:config leader))))
-        (doseq [cmd ["SET k=1" "SET k=2" "SET k=3"]]
+        (doseq [cmd ["SET k1=1" "SET k2=2" "SET k3=3"]]
           (let [resp (client/submit-command "127.0.0.1:8000" cmd)]
             (println "  submit" cmd "=>" (:success resp) (:result resp) "leader" (:leader-id resp))))
         (Thread/sleep 600)
-        (print-applied nodes "Applied state after replication:"))
+        (print-kv nodes stores "KV state after replication:"))
 
       (let [leader (leader-node nodes)]
         (if leader
@@ -53,11 +84,11 @@
               survivors (remove #(= (:port (:config %)) killed-port) nodes)
               new-leader (wait-until 8000 #(leader-node survivors))]
           (if new-leader
-            (let [resp (client/submit-command (:me (:config new-leader)) "SET k=4")]
-              (println "submit SET k=4 via" (:me (:config new-leader)) "=>" (:success resp) (:result resp) "leader" (:leader-id resp)))
+            (let [resp (client/submit-command (:me (:config new-leader)) "SET k4=4")]
+              (println "submit SET k4=4 via" (:me (:config new-leader)) "=>" (:success resp) (:result resp) "leader" (:leader-id resp)))
             (println "WARNING: no new leader elected")))
         (Thread/sleep 600)
-        (print-applied nodes "Applied state after failover:"))
+        (print-kv nodes stores "KV state after failover:"))
 
       (finally
         (println "Shutting down...")

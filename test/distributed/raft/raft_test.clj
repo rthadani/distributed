@@ -4,7 +4,7 @@
             [distributed.raft.client :as client]
             [distributed.raft.protocol :as proto]
             [distributed.raft.state :as state]
-            [distributed.raft.follower :as follower])
+            [distributed.raft.roles :as roles])
   (:import (io.grpc.stub StreamObserver)))
 
 ;;; Pure unit tests.
@@ -174,7 +174,7 @@
                 :servers #{"127.0.0.1:23000" "127.0.0.1:23001" "127.0.0.1:23002"}
                 :election-timeout-ms 1000
                 :heartbeat-ms 100}
-        rec (follower/->Follower gs config)
+        rec (roles/->Follower gs config)
         req {:term 5 :candidate-id "127.0.0.1:23001" :last-log-index 0 :last-log-term 0}]
     (try
       (let [c1 (capturing-observer)]
@@ -213,3 +213,40 @@
           (finally (try (main/stop-node! rebooted) (catch Exception _)))))
       (finally
         (doseq [f files] (some-> (java.io.File. f) .delete))))))
+
+(deftest apply-fn-is-invoked-on-commit
+  ;; 3 nodes (not 1) because a single-node cluster has no peer to grant votes
+  ;; and never self-elects. All nodes share one recorded atom via :apply-fn.
+  (let [ports [21601 21602 21603]
+        servers (set (map #(str "127.0.0.1:" %) ports))
+        recorded (atom [])
+        apply-fn (fn [cmd] (swap! recorded conj cmd) cmd)
+        configs (mapv (fn [p]
+                        (main/node-config p
+                                          :servers servers
+                                          :election-timeout-ms 300
+                                          :heartbeat-ms 50
+                                          :apply-fn apply-fn
+                                          :state-file (str "data/test-applyfn-" p "-" (System/nanoTime) ".edn")))
+                      ports)
+        nodes (mapv main/start-node! configs)]
+    (try
+      (is (wait-until 5000 #(leader nodes)))
+      (let [resp (client/submit-command "127.0.0.1:21601" "SET k=1")]
+        (is (:success resp) (str "submit: " resp))
+        (is (wait-until 5000 #(some #{"SET k=1"} @recorded))
+            "apply-fn was called with the committed command"))
+      (finally (shutdown-cluster nodes)))))
+
+(deftest single-node-cluster-elects-and-commits
+  (let [cfg (main/node-config 21701 :servers #{"127.0.0.1:21701"})
+        node (main/start-node! cfg)]
+    (try
+      (is (wait-until 5000 #(= :leader (proto/state (:current-state @(:global-state node)))))
+          "a lone node elects itself")
+      (let [resp (client/submit-command "127.0.0.1:21701" "SET k=1")]
+        (is (:success resp) (str "submit: " resp)))
+      (finally
+        (main/stop-node! node)
+        (some-> (:state-file cfg) (java.io.File.) .delete)))))
+
