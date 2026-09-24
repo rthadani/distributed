@@ -6,16 +6,6 @@
             [distributed.swim.state :as state]
             [distributed.swim.network-peer :as net]))
 
-(defn upsert-member!
-  "Add a member if absent (alive, incarnation 0)."
-  [node {:keys [id host port]}]
-  (swap! node update :membership
-         (fn [m]
-           (if (contains? m id)
-             m
-             (assoc m id {:id id :host host :port port
-                          :incarnation 0 :status :alive})))))
-
 ;;; Canonical atomic membership-state transitions.
 ;;
 ;; Each does its read-compare-write inside a single swap!/swap-vals!, performs
@@ -45,10 +35,11 @@
                                             (assoc :status :alive :incarnation incarnation)
                                             (dissoc :suspected-since)))
                               s))
-                          (when-let [{:keys [host port]} (state/parse-id member-id)]
+                          (if-let [{:keys [host port]} (state/parse-id member-id)]
                             (assoc-in s [:membership member-id]
                                       {:id member-id :host host :port port
-                                       :incarnation incarnation :status :alive}))))))]
+                                       :incarnation incarnation :status :alive})
+                            s)))))]
     (not= old new)))
 
 (defn unsuspect!
@@ -95,11 +86,33 @@
   [node member-id]
   (let [[old new] (swap-vals! node
                     (fn [s]
-                      (if (contains? (:membership s) member-id)
+                      (if (and (not= member-id (:id s))
+                               (contains? (:membership s) member-id))
                         (-> s
                             (update :membership dissoc member-id)
                             (update :confirmed conj member-id))
                         s)))]
+    (not= old new)))
+
+(defn mark-joined!
+  "A member (re)joined: clear its tombstone and add it alive at
+   `incarnation`, but only when it is not already a member. A stale JOIN must
+   not downgrade a live (alive or suspected) member's status or incarnation,
+   nor reset its suspicion timer; it also never joins self. Atomic; returns
+   truthy when changed."
+  [node member-id incarnation]
+  (let [[old new] (swap-vals! node
+                    (fn [s]
+                      (if (or (= member-id (:id s))
+                              (contains? (:membership s) member-id))
+                        s
+                        (if-let [{:keys [host port]} (state/parse-id member-id)]
+                          (-> s
+                              (update :confirmed disj member-id)
+                              (assoc-in [:membership member-id]
+                                        {:id member-id :host host :port port
+                                         :incarnation incarnation :status :alive}))
+                          s))))]
     (not= old new)))
 
 (defn self-heal!
@@ -110,6 +123,7 @@
   (let [[old new] (swap-vals! node
                     (fn [s]
                       (if (and (= member-id (:id s))
+                               (not (contains? (:confirmed s) member-id))
                                (>= incarnation (get-in s [:membership member-id :incarnation] -1)))
                         (let [new-inc (inc incarnation)]
                           (-> s
@@ -181,9 +195,8 @@
   (let [joiner-id (:sender-id msg)
         {:keys [host port]} (state/parse-id joiner-id)]
     (when (and host port)
-      (upsert-member! node {:id joiner-id :host host :port port})
-      (swap! node update :confirmed disj joiner-id)
-      (state/enqueue! node (message/update-entry joiner-id 0 :alive))
+      (mark-joined! node joiner-id 0)
+      (state/enqueue! node (message/update-entry joiner-id 0 :join))
       (let [seeds (mapv (fn [[mid m]] (message/update-entry mid (:incarnation m) :alive))
                         (:membership @node))]
         (message/msg :ack

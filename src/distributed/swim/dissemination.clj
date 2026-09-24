@@ -2,8 +2,10 @@
   "Infection-style dissemination and the suspicion/incarnation subprotocol.
 
   apply-update implements the incarnation preference order from the paper
-  (section 4.2): ALIVE and SUSPECT apply only when their incarnation is at
-  least the locally known one, and CONFIRM is unconditional."
+  (section 4.2): ALIVE applies at >= the local incarnation (strictly higher
+  when the member is currently suspected), SUSPECT at >=, CONFIRM is
+  unconditional, and JOIN clears the :confirmed tombstone and re-adds the
+  member."
   (:require [distributed.swim.dispatch :refer [handle-message apply-update
                                                apply-updates!]]
             [distributed.swim.message :as message]
@@ -51,18 +53,21 @@
   (when (membership/mark-failed! node member-id)
     (state/enqueue! node (message/update-entry member-id incarnation :confirm))))
 
+(defmethod apply-update :join [node {:keys [member-id incarnation]}]
+  (when (membership/mark-joined! node member-id incarnation)
+    (state/enqueue! node (message/update-entry member-id incarnation :join))))
+
 ;;; handle-message: apply the payload, re-enqueue for onward spread, and ACK.
 
 (defn- apply-and-ack
-  "Apply the update carried by `msg`, re-enqueue it for onward spread, and
-   return the piggybacked ACK."
+  "Apply the update carried by `msg` (each apply-update method enqueues it for
+   onward spread) and return the piggybacked ACK."
   [node msg]
   (apply-updates! node (:updates msg))
   (let [u {:member-id (:target-id msg)
            :incarnation (:incarnation msg)
            :type (:type msg)}]
-    (apply-update node u)
-    (state/enqueue! node u))
+    (apply-update node u))
   (message/msg :ack :sender-id (:id @node) :updates (state/pick-piggyback node)))
 
 (defmethod handle-message :suspect [node msg] (apply-and-ack node msg))
