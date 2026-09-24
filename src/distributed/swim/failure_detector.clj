@@ -11,15 +11,14 @@
 ;;; Inbound handlers.
 
 (defmethod handle-message :ping [node msg]
-  (when-not (:drop-inbound? @node)
-    (apply-updates! node (:updates msg))
-    (message/msg :ack
-                 :sender-id (:id @node)
-                 :sequence (:sequence msg)
-                 :target-id (:sender-id msg)
-                 :target-host (:host @node)
-                 :target-port (:port @node)
-                 :updates (state/pick-piggyback node))))
+  (apply-updates! node (:updates msg))
+  (message/msg :ack
+               :sender-id (:id @node)
+               :sequence (:sequence msg)
+               :target-id (:sender-id msg)
+               :target-host (:host @node)
+               :target-port (:port @node)
+               :updates (state/pick-piggyback node)))
 
 (defn- negative-ping-req [node msg]
   (message/msg :ping-req
@@ -29,28 +28,27 @@
                :updates (state/pick-piggyback node)))
 
 (defmethod handle-message :ping-req [node msg]
-  (when-not (:drop-inbound? @node)
-    (apply-updates! node (:updates msg))
-    (let [ping (message/msg :ping
-                            :sender-id (:id @node)
-                            :sequence (:sequence msg)
-                            :target-id (:target-id msg)
-                            :target-host (:target-host msg)
-                            :target-port (:target-port msg)
-                            :updates (state/pick-piggyback node))]
-      (try
-        (let [resp (net/send! (:target-host msg) (:target-port msg) ping
-                              (:ack-timeout-ms (:config @node)))]
-          (apply-updates! node (:updates resp))
-          (if (= :ack (:type resp))
-            (message/msg :ack
-                         :sender-id (:id @node)
-                         :sequence (:sequence msg)
-                         :target-id (:target-id msg)
-                         :updates (state/pick-piggyback node))
-            (negative-ping-req node msg)))
-        (catch StatusRuntimeException _
-          (negative-ping-req node msg))))))
+  (apply-updates! node (:updates msg))
+  (let [ping (message/msg :ping
+                          :sender-id (:id @node)
+                          :sequence (:sequence msg)
+                          :target-id (:target-id msg)
+                          :target-host (:target-host msg)
+                          :target-port (:target-port msg)
+                          :updates (state/pick-piggyback node))]
+    (try
+      (let [resp (net/send! (:target-host msg) (:target-port msg) ping
+                            (:ack-timeout-ms (:config @node)))]
+        (apply-updates! node (:updates resp))
+        (if (= :ack (:type resp))
+          (message/msg :ack
+                       :sender-id (:id @node)
+                       :sequence (:sequence msg)
+                       :target-id (:target-id msg)
+                       :updates (state/pick-piggyback node))
+          (negative-ping-req node msg)))
+      (catch StatusRuntimeException _
+        (negative-ping-req node msg)))))
 
 ;;; Probing.
 
@@ -106,12 +104,20 @@
   (state/enqueue! node (message/update-entry member-id incarnation :alive)))
 
 (defn declare-suspected
-  "Mark `member-id` suspected and disseminate SUSPECT."
+  "Mark `member-id` suspected and disseminate SUSPECT. The suspicion timer
+   (:suspected-since) is set only on the first failed probe; repeated failed
+   probes of an already-suspected member must not extend it, otherwise a dead
+   member would never be confirmed failed (SWIM paper §4.2: one-shot timer)."
   [node member-id incarnation]
   (swap! node update :membership
-         (fn [m] (-> m
-                     (assoc-in [member-id :status] :suspected)
-                     (assoc-in [member-id :suspected-since] (System/currentTimeMillis)))))
+         (fn [m]
+           (let [was-suspected? (= :suspected (get-in m [member-id :status]))]
+             (-> m
+                 (assoc-in [member-id :status] :suspected)
+                 (assoc-in [member-id :suspected-since]
+                           (if was-suspected?
+                             (get-in m [member-id :suspected-since])
+                             (System/currentTimeMillis)))))))
   (state/enqueue! node (message/update-entry member-id incarnation :suspect)))
 
 (defn declare-failed
@@ -138,20 +144,23 @@
 
 (defn run-protocol-period!
   "One SWIM period: sweep suspicions, pick the next target, probe it directly
-   then indirectly, and declare suspicion if both fail."
+   then indirectly, and declare suspicion if both fail. A node with
+   `:drop-inbound?` set skips the whole period so it neither probes nor
+   applies any responses (a fully 'down' node)."
   [node]
-  (sweep-expired-suspicions node)
-  (swap! node update :sequence inc)
-  (when-let [target (membership/round-robin-target node)]
-    (let [seq (:sequence @node)
-          tid (:id target)]
-      (if (direct-probe node target seq)
-        (when (suspected? node tid)
-          (mark-alive! node tid (get-in @node [:membership tid :incarnation] 0)))
-        (if (indirect-probe node target seq)
+  (when-not (:drop-inbound? @node)
+    (sweep-expired-suspicions node)
+    (swap! node update :sequence inc)
+    (when-let [target (membership/round-robin-target node)]
+      (let [seq (:sequence @node)
+            tid (:id target)]
+        (if (direct-probe node target seq)
           (when (suspected? node tid)
             (mark-alive! node tid (get-in @node [:membership tid :incarnation] 0)))
-          (declare-suspected node tid (get-in @node [:membership tid :incarnation] 0)))))))
+          (if (indirect-probe node target seq)
+            (when (suspected? node tid)
+              (mark-alive! node tid (get-in @node [:membership tid :incarnation] 0)))
+            (declare-suspected node tid (get-in @node [:membership tid :incarnation] 0))))))))
 
 ;;; Node lifecycle.
 
@@ -163,9 +172,11 @@
              (while (:running? @node)
                (try
                  (run-protocol-period! node)
+                 (Thread/sleep (:protocol-period-ms (:config @node)))
+                 (catch InterruptedException _
+                   nil)  ;; stop-node! interrupts the sleep; exit the loop quietly
                  (catch Exception e
-                   (println "SWIM period error:" (.getMessage e))))
-               (Thread/sleep (:protocol-period-ms (:config @node))))))]
+                   (println "SWIM period error:" (.getMessage e)))))))]
     (.setDaemon t true)
     (.start t)
     (swap! node assoc :thread t)

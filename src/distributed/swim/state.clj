@@ -50,13 +50,13 @@
 (defn- update-key [u] (select-keys u [:member-id :incarnation :type]))
 
 (defn enqueue!
-  "Add `update` to the dissemination buffer unless it is already queued."
-  [node update]
+  "Add `entry` to the dissemination buffer unless it is already queued."
+  [node entry]
   (swap! node update :dissemination
          (fn [buf]
-           (if (some #(= (update-key %) (update-key update)) buf)
+           (if (some #(= (update-key %) (update-key entry)) buf)
              buf
-             (conj buf (assoc update :piggybacked 0))))))
+             (conj buf (assoc entry :piggybacked 0))))))
 
 (defn- log2 [n] (/ (Math/log (max 2 n)) (Math/log 2)))
 

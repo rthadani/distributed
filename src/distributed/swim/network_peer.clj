@@ -13,16 +13,20 @@
   (.onCompleted response))
 
 (defn service
-  "The gRPC service handling inbound Send calls for `node`."
+  "The gRPC service handling inbound Send calls for `node`.
+
+   When `:drop-inbound?` is true the node simulates being down/overloaded: it
+   replies to nothing, so callers' deadlines expire (used by the demo to model
+   an unresponsive member). A nil handler result has the same effect."
   [node]
   (proxy [SwimGrpc$SwimImplBase] []
     (send [^SwimSpec$SwimMessage request ^StreamObserver response]
-      (let [msg (message/->clj request)
-            resp (handle-message node msg)]
-        ;; A nil response simulates a dropped message: don't reply and let the
-        ;; caller's deadline expire (used to model an overloaded node).
-        (when resp
-          (send-grpc-response response (message/->proto resp)))))))
+      (when-not (:drop-inbound? @node)
+        (let [msg (message/->clj request)
+              resp (handle-message node msg)]
+          ;; A nil response also simulates a dropped message.
+          (when resp
+            (send-grpc-response response (message/->proto resp))))))))
 
 (defn server
   "Start the gRPC server for `node`; returns the started Server."

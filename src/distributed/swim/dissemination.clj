@@ -62,10 +62,14 @@
       (when (and (>= incarnation cur)
                  (contains? (:membership @node) member-id))
         (swap! node update :membership
-               (fn [m] (-> m
-                           (assoc-in [member-id :status] :suspected)
-                           (assoc-in [member-id :suspected-since]
-                                     (System/currentTimeMillis)))))))))
+               (fn [m]
+                 (let [was-suspected? (= :suspected (get-in m [member-id :status]))]
+                   (-> m
+                       (assoc-in [member-id :status] :suspected)
+                       (assoc-in [member-id :suspected-since]
+                                 (if was-suspected?
+                                   (get-in m [member-id :suspected-since])
+                                   (System/currentTimeMillis)))))))))))
 
 (defmethod apply-update :confirm [node {:keys [member-id]}]
   (membership/remove-member! node member-id))
