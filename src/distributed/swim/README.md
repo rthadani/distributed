@@ -50,36 +50,60 @@ it still gets no ACK, it marks the target **suspected**.
 
 ### Dissemination
 
-Membership updates (SUSPECT / ALIVE / CONFIRM / JOIN) are piggybacked on
+Membership updates (SUSPECT / ALIVE / CONFIRM) are piggybacked on
 ping / ack / ping-req messages, so dissemination generates no extra packets.
-Each update is gossiped at most `lambda * log2(N)` times, preferring the
-least-gossiped entries.
+A join is announced as an ALIVE for the new member. Each update is gossiped
+at most `lambda * log2(N)` times, preferring the least-gossiped entries.
 
 ### Suspicion and incarnation numbers
 
 A suspected member stays in the list and is still probed. If it answers before
 the suspicion timeout, it is un-suspected (ALIVE). If a member learns it has
 been suspected, it bumps its incarnation and broadcasts ALIVE. If the suspicion
-times out, the member is CONFIRM failed and removed.
+times out, the member is CONFIRM failed, removed, and recorded in a
+`:confirmed` tombstone set (a stale update cannot resurrect it until it
+re-JOINs).
 
-Incarnation numbers order these updates (SWIM paper §4.2):
+Incarnation numbers order these updates (SWIM paper §4.2). Both ALIVE and
+SUSPECT apply only when the update's incarnation is at least the locally known
+one, so at equal incarnation the later message wins and a higher incarnation
+always wins (`CONFIRM` is unconditional):
 
-| Message | Overrides |
+| Message | Applies when |
 |---|---|
-| `Alive(i)` | `Suspect(i)`, and any `Alive(j)`/`Suspect(j)` with `j < i` |
-| `Suspect(i)` | any `Suspect(j)`/`Alive(j)` with `j < i` |
-| `Confirm` | any `Alive` or `Suspect` |
+| `Alive(i)` | `i >=` local incarnation, or the member is unknown and not confirmed |
+| `Suspect(i)` | `i >=` local incarnation, member present and not confirmed |
+| `Confirm` | unconditional (removes the member and tombstones it) |
 
-In the code this falls out of "apply only when the update's incarnation is at
-least the locally known one" (`CONFIRM` is unconditional), plus the one-shot
-suspicion timer: the self-heal bumps the incarnation, so its `Alive(i+1)`
-overrides the earlier `Suspect(i)`.
+Two refinements keep the suspicion timer sound: a suspected member is revived
+by ALIVE only at a *strictly higher* incarnation (its self-heal bump, which
+makes `Alive(i+1)` override the earlier `Suspect(i)`), and the one-shot timer
+is set only on the first suspicion. A stale same-incarnation ALIVE (such as a
+lingering join-ALIVE) therefore cannot keep resetting the timer. A member that
+answers a direct or indirect probe is un-suspected locally via a separate
+unconditional path.
 
 ### The one deviation from the paper
 
 The paper sends `ping` and `ack` as separate UDP datagrams. Here the gRPC
 `Send` RPC is unary, so `ACK` is the response to a `PING` (request and response
 are coupled). Semantics are unchanged.
+
+## Configuration
+
+Defaults (in `state.clj` `default-config`):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `protocol-period-ms` | 800 | one failure-detection round |
+| `ack-timeout-ms` | 300 | direct/indirect probe deadline |
+| `k` | 2 | indirect-probe relay count |
+| `suspicion-timeout-ms` | 2000 | suspected -> confirmed deadline |
+| `lambda` | 3 | gossip cap multiplier (`lambda * log2(N)`) |
+
+The demo overrides `suspicion-timeout-ms` to 8000 (so B is suspected but not
+confirmed before it recovers) and `lambda` to 6 (so the SUSPECT update stays
+buffered long enough to reach B after it recovers).
 
 ## gRPC mapping
 
@@ -125,3 +149,7 @@ The commit history teaches the protocol bottom-up, one piece at a time:
 8. **Add infection-style dissemination and suspicion with incarnations**.
 9. **Add SWIM demo** — end-to-end proof.
 10. **Document SWIM design and dev process** — this file.
+11. **Harden SWIM membership transitions (review feedback)** — atomic
+    transitions, `:confirmed` tombstone, strict-incarnation suspicion revival.
+12. **Add SWIM unit tests** — pin the trickiest pure logic; `lein test` green.
+13. **Tidy SWIM code and documentation** — this commit.

@@ -143,7 +143,7 @@
 (defn member-status [node id]
   (get-in @node [:membership id :status]))
 
-(defn live-peers
+(defn probe-targets
   "Alive or suspected peers, excluding self."
   [node]
   (let [{:keys [id membership]} @node]
@@ -152,9 +152,9 @@
          (filter #(#{:alive :suspected} (:status %))))))
 
 (defn random-peers
-  "Up to n uniformly random live peers."
+  "Up to n uniformly random probe targets."
   [node n]
-  (->> (live-peers node) shuffle (take n) vec))
+  (->> (probe-targets node) shuffle (take n) vec))
 
 (defn round-robin-target
   "The next probe target: cycle through live peers in a shuffled order,

@@ -19,6 +19,8 @@
 
 ;;; Builders.
 
+;; :sequence is the paper's per-period tag; informational under unary gRPC,
+;; would enable stale-ACK detection on a datagram transport.
 (defn update-entry
   "A single dissemination element (suspect/alive/confirm)."
   [member-id incarnation type]

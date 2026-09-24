@@ -12,8 +12,7 @@
    :ack-timeout-ms 300
    :k 2
    :suspicion-timeout-ms 2000
-   :lambda 3
-   :max-piggyback 6})
+   :lambda 3})
 
 (defn node-id [host port] (str host ":" port))
 

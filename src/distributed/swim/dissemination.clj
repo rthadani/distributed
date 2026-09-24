@@ -53,23 +53,18 @@
 
 ;;; handle-message: apply the payload, re-enqueue for onward spread, and ACK.
 
-(defmethod handle-message :suspect [node msg]
+(defn- apply-and-ack
+  "Apply the update carried by `msg`, re-enqueue it for onward spread, and
+   return the piggybacked ACK."
+  [node msg]
   (apply-updates! node (:updates msg))
-  (let [u {:member-id (:target-id msg) :incarnation (:incarnation msg) :type :suspect}]
+  (let [u {:member-id (:target-id msg)
+           :incarnation (:incarnation msg)
+           :type (:type msg)}]
     (apply-update node u)
     (state/enqueue! node u))
   (message/msg :ack :sender-id (:id @node) :updates (state/pick-piggyback node)))
 
-(defmethod handle-message :alive [node msg]
-  (apply-updates! node (:updates msg))
-  (let [u {:member-id (:target-id msg) :incarnation (:incarnation msg) :type :alive}]
-    (apply-update node u)
-    (state/enqueue! node u))
-  (message/msg :ack :sender-id (:id @node) :updates (state/pick-piggyback node)))
-
-(defmethod handle-message :confirm [node msg]
-  (apply-updates! node (:updates msg))
-  (let [u {:member-id (:target-id msg) :incarnation (:incarnation msg) :type :confirm}]
-    (apply-update node u)
-    (state/enqueue! node u))
-  (message/msg :ack :sender-id (:id @node) :updates (state/pick-piggyback node)))
+(defmethod handle-message :suspect [node msg] (apply-and-ack node msg))
+(defmethod handle-message :alive   [node msg] (apply-and-ack node msg))
+(defmethod handle-message :confirm [node msg] (apply-and-ack node msg))
