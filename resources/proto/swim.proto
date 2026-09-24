@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package swim;
+option java_outer_classname = "SwimSpec";
+
+enum MsgType {
+  PING = 0;
+  ACK = 1;
+  PING_REQ = 2;
+  SUSPECT = 3;
+  ALIVE = 4;
+  CONFIRM = 5;
+  JOIN = 6;
+}
+
+// One piggybacked dissemination element.
+message Update {
+  string member_id = 1;
+  int64  incarnation = 2;
+  MsgType type = 3;   // SUSPECT | ALIVE | CONFIRM
+}
+
+message SwimMessage {
+  MsgType type = 1;
+  string sender_id = 2;
+  int64  sequence = 3;    // initiator's protocol-period seq (echoed back)
+  string target_id = 4;   // PING_REQ: who to probe; ACK: who was probed
+  string target_host = 5; // PING_REQ: relay can reach target without knowing it
+  int32  target_port = 6;
+  int64  incarnation = 7; // SUSPECT/ALIVE/CONFIRM/JOIN payload
+  repeated Update updates = 8; // piggybacked dissemination
+}
+
+service Swim {
+  rpc Send (SwimMessage) returns (SwimMessage) {}
+}
