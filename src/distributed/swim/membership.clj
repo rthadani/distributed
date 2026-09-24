@@ -59,22 +59,27 @@
 (defn mark-suspected!
   "Mark `member-id` suspected at `incarnation` unless confirmed or unknown.
    Stores the update's incarnation (needed for the preference order) and sets
-   the one-shot suspicion timer only on the non-suspected->suspected
-   transition. Returns truthy when the state changed."
+   the one-shot suspicion timer only on a NEW suspicion: the existing timer is
+   preserved only when re-suspected at the SAME incarnation, and a fresh timer
+   is set on the first suspicion and on a strictly higher-incarnation
+   re-suspicion (a new suspicion cycle after a self-heal). Returns truthy when
+   the state changed."
   [node member-id incarnation]
   (let [[old new] (swap-vals! node
                     (fn [s]
                       (if (or (contains? (:confirmed s) member-id)
                               (not (contains? (:membership s) member-id)))
                         s
-                        (let [m (get-in s [:membership member-id])]
-                          (if (>= incarnation (:incarnation m))
-                            (let [was-suspected? (= :suspected (:status m))]
+                        (let [m (get-in s [:membership member-id])
+                              cur-inc (:incarnation m)]
+                          (if (>= incarnation cur-inc)
+                            (let [same-suspicion? (and (= :suspected (:status m))
+                                                       (= incarnation cur-inc))]
                               (assoc-in s [:membership member-id]
                                         (-> m
                                             (assoc :status :suspected :incarnation incarnation)
                                             (assoc :suspected-since
-                                                   (if was-suspected?
+                                                   (if same-suspicion?
                                                      (:suspected-since m)
                                                      (System/currentTimeMillis))))))
                             s)))))]
@@ -82,7 +87,8 @@
 
 (defn mark-failed!
   "CONFIRM `member-id` failed: remove it from membership and add it to the
-   :confirmed tombstone set. Returns truthy when the member was present."
+   :confirmed tombstone set. Never removes self. Returns truthy when the
+   member was present and is not self."
   [node member-id]
   (let [[old new] (swap-vals! node
                     (fn [s]
@@ -98,7 +104,9 @@
   "A member (re)joined: clear its tombstone and add it alive at
    `incarnation`, but only when it is not already a member. A stale JOIN must
    not downgrade a live (alive or suspected) member's status or incarnation,
-   nor reset its suspicion timer; it also never joins self. Atomic; returns
+   nor reset its suspicion timer; it also never joins self. In the same swap
+   that re-adds the member, retires any buffered :confirm update for it so a
+   stale CONFIRM cannot re-tombstone it after the re-join. Atomic; returns
    truthy when changed."
   [node member-id incarnation]
   (let [[old new] (swap-vals! node
@@ -109,6 +117,11 @@
                         (if-let [{:keys [host port]} (state/parse-id member-id)]
                           (-> s
                               (update :confirmed disj member-id)
+                              (update :dissemination
+                                      (fn [buf]
+                                        (into [] (remove #(and (= member-id (:member-id %))
+                                                               (= :confirm (:type %))))
+                                              buf)))
                               (assoc-in [:membership member-id]
                                         {:id member-id :host host :port port
                                          :incarnation incarnation :status :alive}))
@@ -118,7 +131,8 @@
 (defn self-heal!
   "When `member-id` is this node and `incarnation` is not stale, bump own
    incarnation to (inc incarnation), clear suspicion, and return the new
-   incarnation. Returns nil when nothing changed (the caller gossips ALIVE)."
+   incarnation. Returns the new incarnation when it changed (which the caller
+   then gossips), nil when unchanged."
   [node member-id incarnation]
   (let [[old new] (swap-vals! node
                     (fn [s]
@@ -144,7 +158,8 @@
         [old new] (swap-vals! node
                     (fn [s]
                       (if-let [m (get-in s [:membership member-id])]
-                        (if (and (= :suspected (:status m))
+                        (if (and (not= member-id (:id s))
+                                 (= :suspected (:status m))
                                  (:suspected-since m)
                                  (>= (- now (:suspected-since m)) timeout-ms))
                           (-> s

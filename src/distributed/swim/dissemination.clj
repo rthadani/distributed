@@ -45,8 +45,7 @@
     ;; Suspected in our current incarnation: bump and broadcast ALIVE.
     (when-let [new-inc (membership/self-heal! node member-id incarnation)]
       (gossip! node (message/update-entry member-id new-inc :alive)))
-    (do
-      (membership/mark-suspected! node member-id incarnation)
+    (when (membership/mark-suspected! node member-id incarnation)
       (state/enqueue! node (message/update-entry member-id incarnation :suspect)))))
 
 (defmethod apply-update :confirm [node {:keys [member-id incarnation]}]
