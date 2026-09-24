@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is]]
             [distributed.swim.state :as state]
             [distributed.swim.dispatch :refer [handle-message]]
+            [distributed.swim.message :as message]
             [distributed.swim.membership :as membership]))
 
 (def member-a "127.0.0.1:9001")
@@ -132,7 +133,12 @@
     (let [targets (repeatedly 3 #(:id (membership/round-robin-target node)))]
       (is (= #{member-a member-b "127.0.0.1:9003"} (set targets)))
       (is (= 3 (count targets)))
-      (is (= 0 (:probe-index @node))))))
+      (is (= 0 (:probe-index @node)))
+      ;; a second full traversal also yields each member exactly once,
+      ;; proving the traversal/reshuffle rather than just the internal index
+      (let [second (repeatedly 3 #(:id (membership/round-robin-target node)))]
+        (is (= #{member-a member-b "127.0.0.1:9003"} (set second)))
+        (is (= 3 (count second)))))))
 
 (deftest fail-if-expired-via-alive-test
   (let [node (fresh-node)]
@@ -146,3 +152,44 @@
            (- (System/currentTimeMillis) 2000))
     (is (false? (membership/fail-if-expired! node member-a 1000)))
     (is (some? (get-in @node [:membership member-a])))))
+
+(deftest mark-failed-self-guard-test
+  (let [node (fresh-node)
+        self (:id @node)]
+    (is (false? (membership/mark-failed! node self)))
+    (is (some? (get-in @node [:membership self])))
+    (is (not (contains? (:confirmed @node) self)))))
+
+(deftest mark-suspected-unknown-member-test
+  (let [node (fresh-node)]
+    (is (false? (membership/mark-suspected! node "127.0.0.1:9999" 0)))
+    (is (nil? (get-in @node [:membership "127.0.0.1:9999"])))))
+
+(deftest higher-inc-resuspect-resets-timer-test
+  (let [node (fresh-node)]
+    (membership/mark-alive! node member-a 0)
+    (membership/mark-suspected! node member-a 0)
+    (swap! node assoc-in [:membership member-a :suspected-since] 12345)
+    ;; same-inc re-suspect preserves the one-shot timer
+    (membership/mark-suspected! node member-a 0)
+    (is (= 12345 (get-in @node [:membership member-a :suspected-since])))
+    ;; higher-inc re-suspect is a new suspicion cycle: fresh (non-sentinel) timer
+    (membership/mark-suspected! node member-a 1)
+    (let [t (get-in @node [:membership member-a :suspected-since])]
+      (is (some? t))
+      (is (not= 12345 t)))))
+
+(deftest stale-confirm-retired-on-join-test
+  (let [node (fresh-node)]
+    (membership/mark-alive! node member-a 0)
+    (membership/mark-failed! node member-a)
+    ;; the CONFIRM is buffered for piggybacking
+    (state/enqueue! node (message/update-entry member-a 0 :confirm))
+    (is (some #(and (= member-a (:member-id %)) (= :confirm (:type %)))
+              (:dissemination @node)))
+    ;; a re-JOIN re-adds the member and retires the buffered CONFIRM atomically
+    (is (true? (membership/mark-joined! node member-a 0)))
+    (is (= :alive (get-in @node [:membership member-a :status])))
+    (is (not (contains? (:confirmed @node) member-a)))
+    (is (not (some #(and (= member-a (:member-id %)) (= :confirm (:type %)))
+                   (:dissemination @node))))))

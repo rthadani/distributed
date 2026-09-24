@@ -22,7 +22,7 @@
 ;; :sequence is the paper's per-period tag; informational under unary gRPC,
 ;; would enable stale-ACK detection on a datagram transport.
 (defn update-entry
-  "A single dissemination element (suspect/alive/confirm)."
+  "A single dissemination element (suspect/alive/confirm/join)."
   [member-id incarnation type]
   {:member-id member-id :incarnation incarnation :type type})
 

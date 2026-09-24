@@ -32,8 +32,8 @@ It prints each node's membership view along the way and ends with
 | `message.clj` | Pure protobuf <-> Clojure codec; no I/O. |
 | `dispatch.clj` | `handle-message` / `apply-update` multimethods, dispatched on `:type`. |
 | `network_peer.clj` | gRPC `Send` service, server, cached blocking stubs, `send!`. |
-| `membership.clj` | Membership list, round-robin probe target selection, the JOIN handshake. |
-| `failure_detector.clj` | ping/ack handling, indirect probe, the protocol-period loop, the suspicion timer, node lifecycle. |
+| `membership.clj` | Membership list, round-robin probe target selection, the JOIN handshake, and the atomic membership-state transitions (incarnation order, one-shot suspicion timer, tombstone). |
+| `failure_detector.clj` | ping/ack handling, indirect probe, the protocol-period loop, suspicion sweep, node lifecycle. |
 | `dissemination.clj` | Infection-style dissemination and the suspicion/incarnation subprotocol. |
 | `demo.clj` | The runnable three-node demo. |
 
@@ -76,7 +76,7 @@ member; JOIN is unconditional and clears the tombstone:
 | `Alive(i)` | `i >=` local incarnation, or the member is unknown and not confirmed; strictly higher (`i >`) when the member is currently suspected |
 | `Suspect(i)` | `i >=` local incarnation, member present and not confirmed |
 | `Confirm` | unconditional (removes the member and tombstones it) |
-| `Join` | unconditional on incarnation (clears the tombstone and re-adds the member) |
+| `Join` | unconditional on incarnation (clears the tombstone, retires any buffered stale CONFIRM for the member, and re-adds it) |
 
 Two refinements keep the suspicion timer sound: a suspected member is revived
 by ALIVE only at a *strictly higher* incarnation (its self-heal bump, which
@@ -162,3 +162,9 @@ The commit history teaches the protocol bottom-up, one piece at a time:
     never removes itself; redundant re-enqueue removed.
 15. **Add SWIM edge-case tests and clarify documentation** — self-heal,
     unsuspect, re-join, and malformed-id tests; docs match the code.
+16. **Fix SWIM re-join stale-confirm and suspicion edges** — a JOIN now retires
+    buffered CONFIRMs; `fail-if-expired!` gains the self-guard; a higher-inc
+    re-suspicion resets the timer; a rejected SUSPECT is no longer re-gossiped.
+17. **Polish SWIM tests and documentation** — self-guard, unknown-member,
+    timer-reset, stale-confirm, and second-traversal tests; docstrings and the
+    README code map match the code.

@@ -21,7 +21,7 @@
   "Apply one piggybacked dissemination update to `node`."
   (fn [node update] (:type update)))
 
-(defmethod handle-message :default [node msg]
+(defmethod handle-message :default [_ msg]
   (println "unknown SWIM message type:" (:type msg))
   nil)
 
