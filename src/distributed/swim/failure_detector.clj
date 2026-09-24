@@ -91,51 +91,26 @@
                  (catch StatusRuntimeException _ false))))
            relays))))
 
-;;; Membership-state transitions (suspicion/confirm/revive).
-
-(defn mark-alive!
-  "Revive `member-id` at `incarnation` and disseminate ALIVE."
-  [node member-id incarnation]
-  (swap! node update :membership
-         (fn [m] (-> m
-                     (assoc-in [member-id :status] :alive)
-                     (assoc-in [member-id :incarnation] incarnation)
-                     (update-in [member-id] dissoc :suspected-since))))
-  (state/enqueue! node (message/update-entry member-id incarnation :alive)))
+;;; Membership-state transitions delegate to the canonical atomic fns in
+;;; membership.clj (single source of truth), then disseminate the result.
 
 (defn declare-suspected
-  "Mark `member-id` suspected and disseminate SUSPECT. The suspicion timer
-   (:suspected-since) is set only on the first failed probe; repeated failed
-   probes of an already-suspected member must not extend it, otherwise a dead
-   member would never be confirmed failed (SWIM paper §4.2: one-shot timer)."
+  "Mark `member-id` suspected and disseminate SUSPECT. The one-shot timer and
+   incarnation store live in membership/mark-suspected!."
   [node member-id incarnation]
-  (swap! node update :membership
-         (fn [m]
-           (let [was-suspected? (= :suspected (get-in m [member-id :status]))]
-             (-> m
-                 (assoc-in [member-id :status] :suspected)
-                 (assoc-in [member-id :suspected-since]
-                           (if was-suspected?
-                             (get-in m [member-id :suspected-since])
-                             (System/currentTimeMillis)))))))
+  (membership/mark-suspected! node member-id incarnation)
   (state/enqueue! node (message/update-entry member-id incarnation :suspect)))
 
-(defn declare-failed
-  "Remove `member-id` and disseminate CONFIRM."
-  [node member-id incarnation]
-  (membership/remove-member! node member-id)
-  (state/enqueue! node (message/update-entry member-id incarnation :confirm)))
-
 (defn sweep-expired-suspicions
-  "Declare failed any member whose suspicion has timed out."
+  "CONFIRM failed any member whose one-shot suspicion timer has elapsed. Each
+   check-and-remove is atomic (membership/fail-if-expired!), so a concurrent
+   ALIVE revival is never clobbered by a stale sweep."
   [node]
-  (let [{:keys [membership config]} @node
-        timeout (:suspicion-timeout-ms config)]
-    (doseq [[mid m] membership
-            :when (and (= :suspected (:status m))
-                       (>= (- (System/currentTimeMillis) (:suspected-since m))
-                           timeout))]
-      (declare-failed node mid (:incarnation m)))))
+  (let [timeout (get-in @node [:config :suspicion-timeout-ms])]
+    (doseq [mid (keys (:membership @node))]
+      (let [incarnation (get-in @node [:membership mid :incarnation] 0)]
+        (when (membership/fail-if-expired! node mid timeout)
+          (state/enqueue! node (message/update-entry mid incarnation :confirm)))))))
 
 ;;; Protocol period.
 
@@ -156,10 +131,10 @@
             tid (:id target)]
         (if (direct-probe node target seq)
           (when (suspected? node tid)
-            (mark-alive! node tid (get-in @node [:membership tid :incarnation] 0)))
+            (membership/unsuspect! node tid))
           (if (indirect-probe node target seq)
             (when (suspected? node tid)
-              (mark-alive! node tid (get-in @node [:membership tid :incarnation] 0)))
+              (membership/unsuspect! node tid))
             (declare-suspected node tid (get-in @node [:membership tid :incarnation] 0))))))))
 
 ;;; Node lifecycle.

@@ -31,48 +31,25 @@
           (catch Exception _))))))
 
 ;;; apply-update: merge one piggybacked update into the membership view.
+;;; The incarnation comparison and timer live in membership.clj; here we just
+;;; apply the canonical transition and re-gossip the result.
 
 (defmethod apply-update :alive [node {:keys [member-id incarnation]}]
-  (let [cur (get-in @node [:membership member-id :incarnation] -1)]
-    (when (>= incarnation cur)
-      (let [entry (or (get-in @node [:membership member-id])
-                      (when-let [{:keys [host port]} (state/parse-id member-id)]
-                        {:id member-id :host host :port port}))]
-        (when entry
-          (swap! node update :membership
-                 (fn [m]
-                   (assoc m member-id
-                          (-> entry
-                              (assoc :incarnation incarnation :status :alive)
-                              (dissoc :suspected-since))))))))))
+  (when (membership/mark-alive! node member-id incarnation)
+    (state/enqueue! node (message/update-entry member-id incarnation :alive))))
 
 (defmethod apply-update :suspect [node {:keys [member-id incarnation]}]
-  (let [self? (= member-id (:id @node))
-        cur (get-in @node [:membership member-id :incarnation] -1)]
-    (if self?
-      ;; Suspected in our current incarnation: bump and broadcast ALIVE.
-      (when (>= incarnation cur)
-        (let [new-inc (inc incarnation)]
-          (swap! node update :membership
-                 (fn [m] (-> m
-                             (assoc-in [member-id :incarnation] new-inc)
-                             (assoc-in [member-id :status] :alive)
-                             (update-in [member-id] dissoc :suspected-since))))
-          (gossip! node (message/update-entry member-id new-inc :alive))))
-      (when (and (>= incarnation cur)
-                 (contains? (:membership @node) member-id))
-        (swap! node update :membership
-               (fn [m]
-                 (let [was-suspected? (= :suspected (get-in m [member-id :status]))]
-                   (-> m
-                       (assoc-in [member-id :status] :suspected)
-                       (assoc-in [member-id :suspected-since]
-                                 (if was-suspected?
-                                   (get-in m [member-id :suspected-since])
-                                   (System/currentTimeMillis)))))))))))
+  (if (= member-id (:id @node))
+    ;; Suspected in our current incarnation: bump and broadcast ALIVE.
+    (when-let [new-inc (membership/self-heal! node member-id incarnation)]
+      (gossip! node (message/update-entry member-id new-inc :alive)))
+    (do
+      (membership/mark-suspected! node member-id incarnation)
+      (state/enqueue! node (message/update-entry member-id incarnation :suspect)))))
 
-(defmethod apply-update :confirm [node {:keys [member-id]}]
-  (membership/remove-member! node member-id))
+(defmethod apply-update :confirm [node {:keys [member-id incarnation]}]
+  (when (membership/mark-failed! node member-id)
+    (state/enqueue! node (message/update-entry member-id incarnation :confirm))))
 
 ;;; handle-message: apply the payload, re-enqueue for onward spread, and ACK.
 

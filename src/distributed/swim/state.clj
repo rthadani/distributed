@@ -20,10 +20,15 @@
 (defn parse-id
   "Split a \"host:port\" member id. Returns nil when unparseable."
   [id]
-  (let [i (str/last-index-of id ":")]
-    (when (pos? i)
-      {:host (subs id 0 i)
-       :port (Integer/parseInt (subs id (inc i)))})))
+  (when (string? id)
+    (let [i (str/last-index-of id ":")]
+      (when (and i (pos? i))
+        (let [host (subs id 0 i)
+              port-str (subs id (inc i))]
+          (when (and (seq host) (seq port-str))
+            (try
+              {:host host :port (Integer/parseInt port-str)}
+              (catch NumberFormatException _ nil))))))))
 
 (defn node-config
   "A node config map, defaulting host to 127.0.0.1 and protocol params to
@@ -42,6 +47,7 @@
          :membership {id {:id id :host host :port port :incarnation 0 :status :alive}}
          :probe-order [] :probe-index 0 :sequence 0
          :dissemination []
+         :confirmed #{}
          :drop-inbound? false
          :server nil :thread nil :running? true}))
 
@@ -69,20 +75,22 @@
 (defn pick-piggyback
   "Choose up to `max-piggyback` updates for the next outbound message,
    preferring the least-gossiped ones, increment their counters, and retire
-   any that reached the cap. Returns update maps without :piggybacked."
+   any that reached the cap. Returns update maps without :piggybacked.
+   Selection and increment happen in one swap-vals! so concurrent callers do
+   not under-count and gossip past the cap."
   [node]
   (let [limit (max-piggyback node)
-        buf (:dissemination @node)
-        selected (->> buf (sort-by :piggybacked) (take limit))
-        selected-keys (set (map update-key selected))]
-    (when (seq selected)
-      (swap! node update :dissemination
-             (fn [b]
-               (->> b
-                    (map (fn [u]
-                           (if (contains? selected-keys (update-key u))
-                             (update u :piggybacked inc)
-                             u)))
-                    (remove #(>= (:piggybacked %) limit))
-                    vec))))
+        [old _] (swap-vals! node
+                  (fn [s]
+                    (let [selected (->> (:dissemination s) (sort-by :piggybacked) (take limit))
+                          sel-keys (set (map update-key selected))]
+                      (assoc s :dissemination
+                             (->> (:dissemination s)
+                                  (map (fn [u]
+                                         (if (contains? sel-keys (update-key u))
+                                           (update u :piggybacked inc)
+                                           u)))
+                                  (remove #(>= (:piggybacked %) limit))
+                                  vec)))))
+        selected (->> (:dissemination old) (sort-by :piggybacked) (take limit))]
     (mapv #(dissoc % :piggybacked) selected)))
