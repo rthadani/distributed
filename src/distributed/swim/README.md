@@ -50,9 +50,10 @@ it still gets no ACK, it marks the target **suspected**.
 
 ### Dissemination
 
-Membership updates (SUSPECT / ALIVE / CONFIRM) are piggybacked on
+Membership updates (SUSPECT / ALIVE / CONFIRM / JOIN) are piggybacked on
 ping / ack / ping-req messages, so dissemination generates no extra packets.
-A join is announced as an ALIVE for the new member. Each update is gossiped
+A join is announced as a JOIN update for the new member (which clears any
+`:confirmed` tombstone at recipients). Each update is gossiped
 at most `lambda * log2(N)` times, preferring the least-gossiped entries.
 
 ### Suspicion and incarnation numbers
@@ -64,22 +65,24 @@ times out, the member is CONFIRM failed, removed, and recorded in a
 `:confirmed` tombstone set (a stale update cannot resurrect it until it
 re-JOINs).
 
-Incarnation numbers order these updates (SWIM paper §4.2). Both ALIVE and
-SUSPECT apply only when the update's incarnation is at least the locally known
-one, so at equal incarnation the later message wins and a higher incarnation
-always wins (`CONFIRM` is unconditional):
+Incarnation numbers order these updates (SWIM paper §4.2). SUSPECT applies
+when its incarnation is at least the locally known one; ALIVE applies at `>=`
+unless the member is currently suspected, in which case it must be strictly
+higher (the self-heal bump); CONFIRM is unconditional and tombstones the
+member; JOIN is unconditional and clears the tombstone:
 
 | Message | Applies when |
 |---|---|
-| `Alive(i)` | `i >=` local incarnation, or the member is unknown and not confirmed |
+| `Alive(i)` | `i >=` local incarnation, or the member is unknown and not confirmed; strictly higher (`i >`) when the member is currently suspected |
 | `Suspect(i)` | `i >=` local incarnation, member present and not confirmed |
 | `Confirm` | unconditional (removes the member and tombstones it) |
+| `Join` | unconditional on incarnation (clears the tombstone and re-adds the member) |
 
 Two refinements keep the suspicion timer sound: a suspected member is revived
 by ALIVE only at a *strictly higher* incarnation (its self-heal bump, which
 makes `Alive(i+1)` override the earlier `Suspect(i)`), and the one-shot timer
-is set only on the first suspicion. A stale same-incarnation ALIVE (such as a
-lingering join-ALIVE) therefore cannot keep resetting the timer. A member that
+is set only on the first suspicion. A stale same-incarnation ALIVE therefore
+cannot keep resetting the timer. A member that
 answers a direct or indirect probe is un-suspected locally via a separate
 unconditional path.
 
@@ -153,3 +156,9 @@ The commit history teaches the protocol bottom-up, one piece at a time:
     transitions, `:confirmed` tombstone, strict-incarnation suspicion revival.
 12. **Add SWIM unit tests** — pin the trickiest pure logic; `lein test` green.
 13. **Tidy SWIM code and documentation** — this commit.
+14. **Fix SWIM re-join propagation and node robustness** — JOIN update type
+    clears the `:confirmed` tombstone at every recipient so a re-join
+    propagates; a malformed ALIVE id can no longer wipe the node atom; a node
+    never removes itself; redundant re-enqueue removed.
+15. **Add SWIM edge-case tests and clarify documentation** — self-heal,
+    unsuspect, re-join, and malformed-id tests; docs match the code.

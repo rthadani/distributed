@@ -47,3 +47,21 @@
     (apply-update node {:type :alive :member-id member-a :incarnation 1})
     (is (= :alive (get-in @node [:membership member-a :status])))
     (is (= 1 (get-in @node [:membership member-a :incarnation])))))
+
+(deftest rejoin-propagation-test
+  (let [n1 (fresh-node)
+        n2 (fresh-node)]
+    ;; both nodes confirmed member-a failed
+    (membership/mark-alive! n1 member-a 0)
+    (membership/mark-alive! n2 member-a 0)
+    (membership/mark-failed! n1 member-a)
+    (membership/mark-failed! n2 member-a)
+    (is (contains? (:confirmed @n1) member-a))
+    (is (contains? (:confirmed @n2) member-a))
+    ;; a JOIN update clears the tombstone and re-adds at both nodes
+    (apply-update n1 {:type :join :member-id member-a :incarnation 0})
+    (apply-update n2 {:type :join :member-id member-a :incarnation 0})
+    (is (not (contains? (:confirmed @n1) member-a)))
+    (is (not (contains? (:confirmed @n2) member-a)))
+    (is (= :alive (get-in @n1 [:membership member-a :status])))
+    (is (= :alive (get-in @n2 [:membership member-a :status])))))
