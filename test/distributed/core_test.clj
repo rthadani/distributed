@@ -1,7 +1,7 @@
 (ns distributed.core-test
-  (:require [clojure.test :refer :all]
-            [distributed.core :refer :all]))
+  (:require [clojure.test :refer [deftest is testing]]
+            [distributed.core :refer [foo]]))
 
 (deftest a-test
-  (testing "FIXME, I fail."
-    (is (= 0 1))))
+  (testing "core.foo is defined"
+    (is (fn? foo))))
