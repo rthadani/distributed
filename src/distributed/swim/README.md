@@ -138,33 +138,17 @@ gives the atomic read-modify-write the protocol needs; it is the smallest
 correct primitive (a core.async single-owner loop would be more code, not
 less).
 
-## Dev process (tutorial walkthrough)
+## Dev process
 
-The commit history teaches the protocol bottom-up, one piece at a time:
-
-1. **Remove broken TCP-based SWIM stubs** — clear out the old aleph/gloss code.
-2. **Add SWIM gRPC contract and generated stubs** — define the wire format.
-3. **Declare SWIM message dispatch multimethods** — the extensibility seam.
-4. **Add SWIM message codec and node state** — pure data plus the buffer.
-5. **Wire SWIM messages over gRPC transport** — server, stub, `send!`.
-6. **Implement membership list and round-robin probe selection**.
-7. **Implement SWIM failure detector: ping, ack, indirect probe**.
-8. **Add infection-style dissemination and suspicion with incarnations**.
-9. **Add SWIM demo** — end-to-end proof.
-10. **Document SWIM design and dev process** — this file.
-11. **Harden SWIM membership transitions (review feedback)** — atomic
-    transitions, `:confirmed` tombstone, strict-incarnation suspicion revival.
-12. **Add SWIM unit tests** — pin the trickiest pure logic; `lein test` green.
-13. **Tidy SWIM code and documentation** — this commit.
-14. **Fix SWIM re-join propagation and node robustness** — JOIN update type
-    clears the `:confirmed` tombstone at every recipient so a re-join
-    propagates; a malformed ALIVE id can no longer wipe the node atom; a node
-    never removes itself; redundant re-enqueue removed.
-15. **Add SWIM edge-case tests and clarify documentation** — self-heal,
-    unsuspect, re-join, and malformed-id tests; docs match the code.
-16. **Fix SWIM re-join stale-confirm and suspicion edges** — a JOIN now retires
-    buffered CONFIRMs; `fail-if-expired!` gains the self-guard; a higher-inc
-    re-suspicion resets the timer; a rejected SUSPECT is no longer re-gossiped.
-17. **Polish SWIM tests and documentation** — self-guard, unknown-member,
-    timer-reset, stale-confirm, and second-traversal tests; docstrings and the
-    README code map match the code.
+1. Add SWIM gRPC contract and generated stubs.
+2. Declare SWIM message dispatch multimethods**.
+3. Add SWIM message codec and node state.
+4. Wire SWIM messages over gRPC transport.
+5.  Implement membership list and round-robin probe selection.
+6.  Implement SWIM failure detector: ping, ack, indirect probe.
+7.  Add infection-style dissemination and suspicion with incarnations.
+8.  Add SWIM demo.
+9. Harden SWIM membership transitions `:confirmed` tombstone, strict-incarnation suspicion revival.
+10. Fix SWIM re-join propagation and node robustness JOIN update type clears the `:confirmed` tombstone at every recipient so a re-join propagates; a malformed ALIVE id can no longer wipe the node atom; a node never removes itself; redundant re-enqueue removed.
+11.  Fix SWIM re-join stale-confirm and suspicion edges** — a JOIN now retires buffered CONFIRMs; `fail-if-expired!` gains the self-guard; a higher-inc
+     re-suspicion resets the timer; a rejected SUSPECT is no longer re-gossiped.
